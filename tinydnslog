@@ -71,6 +71,9 @@ What might be a dnscache log line:
   '@400000003bd238e539185f04 rr 401c4337 86400 ns slashdot.org. ns2.andover.net.'))
 2001-10-20 19:54:19.957898500 rr 64.28.67.55 TTL=86400 ns slashdot.org. ns2.andover.net.
 
+>>> parse_logfile(loglines('@4000000063227a320c4f3114 7f000001:9d61:be69 - 0001 www.example.com'))
+2022-09-14 18:04:40.206516500 dropped query (no authority) from 127.0.0.1:40289 (id 48745): a www.example.com
+
 """
 
 import sys
