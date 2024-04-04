@@ -1,37 +1,42 @@
-#!/usr/local/bin/python3.7m -u
-
-#Reads log files from tinydns and/or dnscache and prints them out in
-#human-readable form.  Logs can be supplied on stdin, or listed on
-#the command line:
+#!/usr/bin/env python
+"""
+Reads log files from tinydns and/or dnscache and prints them out in
+human-readable form.  Logs can be supplied on stdin, or listed on
+the command line:
 
  # cat @*.s | parse_djbdns_log
  # parse_djbdns_log @*.s
  # tail -f current | parse_djbdns_log
 
-#Pipes each log file through tai64nlocal, which must be on your path.
+Pipes each log file through tai64nlocal, which must be on your path.
 
-#Requirements:
-# * tai64nlocal on the path
-#* Python 2.2 or greater
+Requirements:
+ * tai64nlocal on the path
+ * Python 3 or greater
 
-#Acknowledgments:
+Acknowledgments:
 
-# * The log format descriptions by Rob Mayoff were invaluable:
-#    http://dqd.com/~mayoff/notes/djbdns/tinydns-log.html
-#   http://dqd.com/~mayoff/notes/djbdns/dnscache-log.html
+* The log format descriptions by Rob Mayoff were invaluable:
+    http://dqd.com/~mayoff/notes/djbdns/tinydns-log.html
+    http://dqd.com/~mayoff/notes/djbdns/dnscache-log.html
 
-# * Faried Nawaz's dnscache log parser was the original inspiration:
-#    http://www.hungry.com/~fn/dnscache-log.pl.txt
+* Faried Nawaz's dnscache log parser was the original inspiration:
+    http://www.hungry.com/~fn/dnscache-log.pl.txt
 
-#Written by Greg Ward <gward@python.net> 2001/12/13.
+Written by Greg Ward <gward@python.net> 2001/12/13.
 
-#Modified to handle IPv6 addresses (as logged by djbdns with the patch at
-#http://www.fefe.de/dns/), 2003/05/03-04, prodded and tested by Jakob
-#Hirsch <jh@plonk.de>.
+Modified to handle IPv6 addresses (as logged by djbdns with the patch at
+http://www.fefe.de/dns/), 2003/05/03-04, prodded and tested by Jakob
+Hirsch <jh@plonk.de>.
 
-#Modified to handle dnscache's AXFR request log lines by Malte Tancred
-#(http://tancred.com/malte.html), 2005/12/20.
-#"""
+Modified to handle dnscache's AXFR request log lines by Malte Tancred
+(http://tancred.com/malte.html), 2005/12/20.
+
+Single-entry output:
+>>> output = make_output("alpha", "single", OTPFILE)
+>>> True if re.match(r'^[0-9]{6}$', output) else output
+True
+"""
 
 import sys, re, subprocess,socket
 from time import strftime, gmtime
@@ -82,6 +87,7 @@ def warn (filename, msg):
 def convert_ip (ip):
     """Convert a hex string representing an IP address to conventional form.
     """
+    print("I see %s" % ip)
     ady = IPv6Address(int(ip, 16))
     if ady < IPv6Address('::ffff:255.255.255.255') and ady > IPv6Address('::ffff:0.0.0.0'):
         return ady.ipv4_mapped
@@ -187,7 +193,7 @@ def handle_dnscache_log (line, match):
     elif event in ("tcpopen", "tcpclose"):
         decode_client(words, 0)
 
-    print (timestamp, event, " ".join(words))
+    print (timestamp, event, " ".join(words), flush=True)
 
 
 def handle_tinydns_log (line, match):
@@ -202,17 +208,17 @@ def handle_tinydns_log (line, match):
 
     if code == "+":
         print(("sent response to %s:%s (id %s): %s %s"
-               % (ip, port, id, type, name)))
+               % (ip, port, id, type, name)), flush=True)
     elif code in ("-", "I", "C"):
         reason = query_drop_reason[code]
         print(("dropped query (%s) from %s:%s (id %s): %s %s"
-               % (reason, ip, port, id, type, name)))
+               % (reason, ip, port, id, type, name)), flush=True)
     elif code == "/":
         print(("dropped query (couldn't parse) from %s:%s"
-               % (ip, port)))
+               % (ip, port)), flush=True)
     else:
         print(("%s from %s:%s (id %s): %s %s"
-               % (code, ip, port, id, type, name)))
+               % (code, ip, port, id, type, name)), flush=True)
 
 
 def parse_logfile (file, filename):
@@ -243,9 +249,7 @@ def parse_logfile (file, filename):
 
 # parse_logfile ()
 
-
 def main ():
-
     if len(sys.argv) > 1:
         for filename in sys.argv[1:]:
             if filename == "-":
@@ -256,8 +260,6 @@ def main ():
                 file.close()
     else:
         parse_logfile(sys.stdin, "(stdin)")
-
-
 
 if __name__ == "__main__":
     try:
