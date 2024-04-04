@@ -38,37 +38,38 @@ Single-entry output:
 True
 """
 
-import sys, re, subprocess,socket
-from time import strftime, gmtime
-from struct import pack
+import sys
+import re
+import subprocess
 
-from ipaddress import IPv4Address, IPv6Address
+from ipaddress import IPv6Address
 
 # common components of line-matching regexes
-timestamp_pat = r'[\d-]+ [\d:\.]+'      # output of tai64nlocal
-hex4_pat = r'[0-9a-f]{4}'
-ip_pat = r'[0-9a-f]{8,32}'              # IPv4 or IPv6 addresses in hex
+timestamp_pat = r"[\d-]+ [\d:\.]+"  # output of tai64nlocal
+hex4_pat = r"[0-9a-f]{4}"
+ip_pat = r"[0-9a-f]{8,32}"  # IPv4 or IPv6 addresses in hex
 
 # discriminate between dnscache and tinydns log lines
 tinydns_log_re = re.compile(
-    r'(%s) (%s):(%s):(%s) ([\+\-IC/]) (%s) (.*)'
-    % (timestamp_pat, ip_pat, hex4_pat, hex4_pat, hex4_pat))
-dnscache_log_re = re.compile(r'(%s) (\w+)(.*)' % timestamp_pat)
+    r"(%s) (%s):(%s):(%s) ([\+\-IC/]) (%s) (.*)"
+    % (timestamp_pat, ip_pat, hex4_pat, hex4_pat, hex4_pat)
+)
+dnscache_log_re = re.compile(r"(%s) (\w+)(.*)" % timestamp_pat)
 
 query_type = {
-      1: "a",
-      2: "ns",
-      5: "cname",
-      6: "soa",
-     12: "ptr",
-     13: "hinfo",
-     15: "mx",
-     16: "txt",
-     17: "rp",
-     24: "sig",
-     25: "key",
-     28: "aaaa",
-     38: "a6",
+    1: "a",
+    2: "ns",
+    5: "cname",
+    6: "soa",
+    12: "ptr",
+    13: "hinfo",
+    15: "mx",
+    16: "txt",
+    17: "rp",
+    24: "sig",
+    25: "key",
+    28: "aaaa",
+    38: "a6",
     252: "axfr",
     255: "any",
 }
@@ -78,53 +79,64 @@ query_drop_reason = {
     "-": "no authority",
     "I": "invalid query",
     "C": "invalid class",
-    }
+}
 
 
-def warn (filename, msg):
+def warn(filename, msg):
     sys.stderr.write("warning: %s: %s\n" % (filename, msg))
 
-def convert_ip (ip):
-    """Convert a hex string representing an IP address to conventional form.
-    """
+
+def convert_ip(ip):
+    """Convert a hex string representing an IP address to conventional form."""
     print("I see %s" % ip)
     ady = IPv6Address(int(ip, 16))
-    if ady < IPv6Address('::ffff:255.255.255.255') and ady > IPv6Address('::ffff:0.0.0.0'):
+    if ady < IPv6Address("::ffff:255.255.255.255") and ady > IPv6Address(
+        "::ffff:0.0.0.0"
+    ):
         return ady.ipv4_mapped
-    else: # ipv6
+    else:  # ipv6
         return str(ady)
 
 
-def _cvt_ip (match):
+def _cvt_ip(match):
     return convert_ip(match.group(1))
 
-def _cvt_port (match):
+
+def _cvt_port(match):
     return ":" + str(int(match.group(1), 16))
 
-def decode_client (words, i):
+
+def decode_client(words, i):
     chunks = words[i].split(":")
-    if len(chunks) == 2:                # ip:port
+    if len(chunks) == 2:  # ip:port
         words[i] = "%s:%d" % (convert_ip(chunks[0]), int(chunks[1], 16))
     elif len(chunks) == 3:
-        words[i] = "%s:%d (id %d)" % (convert_ip(chunks[0]),
-                                      int(chunks[1], 16),
-                                      int(chunks[2], 16))
+        words[i] = "%s:%d (id %d)" % (
+            convert_ip(chunks[0]),
+            int(chunks[1], 16),
+            int(chunks[2], 16),
+        )
 
-def decode_ip (words, i):
+
+def decode_ip(words, i):
     words[i] = convert_ip(words[i])
 
-def decode_ttl (words, i):
+
+def decode_ttl(words, i):
     words[i] = "TTL=%s" % words[i]
 
-def decode_serial (words, i):
+
+def decode_serial(words, i):
     serial = int(words[i])
     words[i] = "#%d" % serial
 
-def decode_type (words, i):
+
+def decode_type(words, i):
     qt = words[i]
     words[i] = query_type.get(int(qt), qt)
 
-def handle_dnscache_log (line, match):
+
+def handle_dnscache_log(line, match):
     (timestamp, event, data) = match.groups()
 
     words = data.split()
@@ -157,9 +169,9 @@ def handle_dnscache_log (line, match):
         decode_ttl(words, 1)
         if words[2] not in ("cname", "mx", "ns", "ptr", "soa"):
             decode_type(words, 2)
-            if words[2] == "a":         # decode answer to an A query
+            if words[2] == "a":  # decode answer to an A query
                 decode_ip(words, 4)
-            if words[2] == "txt":       # text record
+            if words[2] == "txt":  # text record
                 response = words[4]
                 if response.endswith("..."):
                     ellipsis = "..."
@@ -168,9 +180,9 @@ def handle_dnscache_log (line, match):
                     ellipsis = ""
                 length = int(response[0:2], 16)
                 chars = []
-                for i in range(1, len(response)/2):
-                    chars.append(chr(int(response[2*i : (2*i)+2], 16)))
-                words[4] = "%d:\"%s%s\"" % (length, "".join(chars), ellipsis)
+                for i in range(1, len(response) / 2):
+                    chars.append(chr(int(response[2 * i : (2 * i) + 2], 16)))
+                words[4] = '%d:"%s%s"' % (length, "".join(chars), ellipsis)
 
     elif event == "sent":
         decode_serial(words, 0)
@@ -193,42 +205,53 @@ def handle_dnscache_log (line, match):
     elif event in ("tcpopen", "tcpclose"):
         decode_client(words, 0)
 
-    print (timestamp, event, " ".join(words), flush=True)
+    print(timestamp, event, " ".join(words), flush=True)
 
 
-def handle_tinydns_log (line, match):
+def handle_tinydns_log(line, match):
     (timestamp, ip, port, id, code, type, name) = match.groups()
     ip = convert_ip(ip)
     port = int(port, 16)
     id = int(id, 16)
-    type = int(type, 16)                # "001c" -> 28
-    type = query_type.get(type, type)   # 28 -> "aaaa"
+    type = int(type, 16)  # "001c" -> 28
+    type = query_type.get(type, type)  # 28 -> "aaaa"
 
-    sys.stdout.write(timestamp + ' ')
+    sys.stdout.write(timestamp + " ")
 
     if code == "+":
-        print(("sent response to %s:%s (id %s): %s %s"
-               % (ip, port, id, type, name)), flush=True)
+        print(
+            ("sent response to %s:%s (id %s): %s %s" % (ip, port, id, type, name)),
+            flush=True,
+        )
     elif code in ("-", "I", "C"):
         reason = query_drop_reason[code]
-        print(("dropped query (%s) from %s:%s (id %s): %s %s"
-               % (reason, ip, port, id, type, name)), flush=True)
+        print(
+            (
+                "dropped query (%s) from %s:%s (id %s): %s %s"
+                % (reason, ip, port, id, type, name)
+            ),
+            flush=True,
+        )
     elif code == "/":
-        print(("dropped query (couldn't parse) from %s:%s"
-               % (ip, port)), flush=True)
+        print(("dropped query (couldn't parse) from %s:%s" % (ip, port)), flush=True)
     else:
-        print(("%s from %s:%s (id %s): %s %s"
-               % (code, ip, port, id, type, name)), flush=True)
+        print(
+            ("%s from %s:%s (id %s): %s %s" % (code, ip, port, id, type, name)),
+            flush=True,
+        )
 
 
-def parse_logfile (file, filename):
+def parse_logfile(file, filename):
     # Open pipe to tai64nlocal: we will write lines of our input (the
     # raw log file) to it, and read log lines with readable timestamps
     # from it.
-    #(tai_stdout, tai_stdin) = popen2("tai64nlocal", 0)
-    p = subprocess.Popen("tai64nlocal", stdin=subprocess.PIPE,
-                         stdout=subprocess.PIPE,
-                         stderr=subprocess.PIPE)
+    # (tai_stdout, tai_stdin) = popen2("tai64nlocal", 0)
+    p = subprocess.Popen(
+        "tai64nlocal",
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
 
     for line in file:
         p.stdin.write(line.encode())
@@ -247,9 +270,11 @@ def parse_logfile (file, filename):
 
         sys.stdout.write(line)
 
+
 # parse_logfile ()
 
-def main ():
+
+def main():
     if len(sys.argv) > 1:
         for filename in sys.argv[1:]:
             if filename == "-":
@@ -260,6 +285,7 @@ def main ():
                 file.close()
     else:
         parse_logfile(sys.stdin, "(stdin)")
+
 
 if __name__ == "__main__":
     try:
