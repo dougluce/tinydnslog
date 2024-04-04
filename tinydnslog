@@ -33,18 +33,43 @@ Modified to handle dnscache's AXFR request log lines by Malte Tancred
 (http://tancred.com/malte.html), 2005/12/20.
 
 Basic parse of simple line w/IPv4 address:
->>> parse_logfile(testfile(1))
+>>> parse_logfile(loglines(\
+  '@40000000660c67b5162f6f8c 00000000000000000000ffff450ac292:fab6:37b0 + 0001 luther.con.com'))
 2024-04-02 13:16:43.372207500 sent response to 69.10.194.146:64182 (id 14256): a luther.con.com
 
 Parsing of two lines w/IPv4 addresses:
->>> parse_logfile(testfile(2))
+>>> parse_logfile(loglines(\
+  '@40000000660c67b5162f6f8c 00000000000000000000ffff450ac292:fab6:37b0 + 0001 luther.con.com',\
+  '@40000000660c67b516a6f14c 00000000000000000000ffff450ac292:ff30:c5e9 + 0041 luther.con.com'))
 2024-04-02 13:16:43.372207500 sent response to 69.10.194.146:64182 (id 14256): a luther.con.com
 2024-04-02 13:16:43.380039500 sent response to 69.10.194.146:65328 (id 50665): 65 luther.con.com
 
 Parse two lines with IPv6 addresses:
->>> parse_logfile(testfile(3))
+>>> parse_logfile(loglines(\
+  '@40000000660c971110832a4c 262000000cc800000000000000000207:0c4c:2e65 + 0001 luther.con.com',\
+  '@40000000660c9711077afc54 2607f8b0402310000000000000000102:9c8f:365e + 0041 luther.con.com'))
 2024-04-02 16:38:47.277031500 sent response to [2620:0:cc8::207]:3148 (id 11877): a luther.con.com
-2024-04-02 16:38:47.125500500 sent response to [2607:f8b0:4023:1000::102]:40079 (id 13918): 65 luther.con.com
+2024-04-02 16:38:47.125500500 sent response to [2607:f8b0:4023:1000::102]:40079 (id 13918): \
+65 luther.con.com
+
+What might be a dnscache log line:
+>>> parse_logfile(loglines('@400000004e403c710243cfa4 drop 662478551 timed out'))
+2011-08-08 12:43:35.037998500 drop #662478551 timed out
+
+>>> parse_logfile(loglines(\
+  '@400000003d2183d42763d2fc query 3459 7f000001:1012:a0d6 12 83.128.221.200.in-addr.arpa.'))
+2002-07-02 03:43:22.660853500 query #3459 127.0.0.1:4114 (id 41174) ptr 83.128.221.200.in-addr.arpa.
+
+>>> parse_logfile(loglines(\
+  '@400000003d2182f321fe916c servfail 163.182.221.200.in-addr.arpa. input/output error'))
+2002-07-02 03:39:37.570331500 servfail 163.182.221.200.in-addr.arpa. input/output error
+
+>>> parse_logfile(loglines('@40000000498a6dc61fe17dcc cached ns fbi.gov. usc2.akam.net.'))
+2009-02-04 20:40:28.534871500 cached ns fbi.gov. usc2.akam.net.
+
+>>> parse_logfile(loglines(\
+  '@400000003bd238e539185f04 rr 401c4337 86400 ns slashdot.org. ns2.andover.net.'))
+2001-10-20 19:54:19.957898500 rr 64.28.67.55 TTL=86400 ns slashdot.org. ns2.andover.net.
 
 """
 
@@ -56,19 +81,17 @@ import doctest
 import tempfile
 import signal
 
-from ipaddress import IPv6Address
+from ipaddress import IPv6Address, IPv4Address
 
 # common components of line-matching regexes
-timestamp_pat = r"[\d-]+ [\d:\.]+"  # output of tai64nlocal
-hex4_pat = r"[0-9a-f]{4}"
-ip_pat = r"[0-9a-f]{8,32}"  # IPv4 or IPv6 addresses in hex
+TIMESTAMP_PAT = r"[\d-]+ [\d:\.]+"  # output of tai64nlocal
+HEX4_PAT = r"[0-9a-f]{4}"
+IP_PAT = r"[0-9a-f]{8,32}"  # IPv4 or IPv6 addresses in hex
 
 # discriminate between dnscache and tinydns log lines
-tinydns_log_re = re.compile(
-    r"(%s) (%s):(%s):(%s) ([\+\-IC/]) (%s) (.*)"
-    % (timestamp_pat, ip_pat, hex4_pat, hex4_pat, hex4_pat)
-)
-dnscache_log_re = re.compile(r"(%s) (\w+)(.*)" % timestamp_pat)
+tinydns_log_re = re.compile(\
+fr"({TIMESTAMP_PAT}) ({IP_PAT}):({HEX4_PAT}):({HEX4_PAT}) ([\+\-IC/]) ({HEX4_PAT}) (.*)")
+dnscache_log_re = re.compile(fr"({TIMESTAMP_PAT}) (\w+)(.*)")
 
 query_type = {
     1: "a",
@@ -96,56 +119,50 @@ query_drop_reason = {
 }
 
 
-def convert_ip(ip):
+def convert_ip(address):
     """Convert a hex string representing an IP address to conventional form."""
-    ady = IPv6Address(int(ip, 16))
-    if ady < IPv6Address("::ffff:255.255.255.255") and ady > IPv6Address(
-        "::ffff:0.0.0.0"
-    ):
+    ady = int(address, 16)
+    if 0 < ady < int("ffffffff", 16): # Is ipv4
+        return str(IPv4Address(ady))
+    ady = IPv6Address(ady)
+    if IPv6Address("::ffff:0.0.0.0") < ady < IPv6Address("::ffff:255.255.255.255"):
         return ady.ipv4_mapped
-    else:  # ipv6
-        return "[%s]" % ady
-
-
-def _cvt_ip(match):
-    return convert_ip(match.group(1))
-
-
-def _cvt_port(match):
-    return ":" + str(int(match.group(1), 16))
+    return f"[{ady}]"
 
 
 def decode_client(words, i):
+    "Decode the client string"
     chunks = words[i].split(":")
     if len(chunks) == 2:  # ip:port
-        words[i] = "%s:%d" % (convert_ip(chunks[0]), int(chunks[1], 16))
+        words[i] = f"{convert_ip(chunks[0])}:{int(chunks[1], 16)}"
     elif len(chunks) == 3:
-        words[i] = "%s:%d (id %d)" % (
-            convert_ip(chunks[0]),
-            int(chunks[1], 16),
-            int(chunks[2], 16),
-        )
+        words[i] = f"{convert_ip(chunks[0])}:{int(chunks[1], 16)} (id {int(chunks[2], 16)})"
 
 
 def decode_ip(words, i):
+    "Humanize the IP address"
     words[i] = convert_ip(words[i])
 
 
 def decode_ttl(words, i):
-    words[i] = "TTL=%s" % words[i]
+    "Add a TTL tag to the ttl"
+    words[i] = f"TTL={words[i]}"
 
 
 def decode_serial(words, i):
+    "Prepend octothorpe to the serial number"
     serial = int(words[i])
-    words[i] = "#%d" % serial
+    words[i] = f"#{serial}"
 
 
 def decode_type(words, i):
-    qt = words[i]
-    words[i] = query_type.get(int(qt), qt)
+    "Translate type code to text"
+    q_type = words[i]
+    words[i] = query_type.get(int(q_type), q_type)
 
 
-def handle_dnscache_log(line, match):
+def handle_dnscache_log(match):
+    "Process log line for dnscache"
     (timestamp, event, data) = match.groups()
 
     words = data.split()
@@ -191,19 +208,19 @@ def handle_dnscache_log(line, match):
                 chars = []
                 for i in range(1, len(response) / 2):
                     chars.append(chr(int(response[2 * i : (2 * i) + 2], 16)))
-                words[4] = '%d:"%s%s"' % (length, "".join(chars), ellipsis)
+                words[4] = f'{length}:"{"".join(chars)}{ellipsis}"'
 
     elif event == "sent":
         decode_serial(words, 0)
 
     elif event == "stats":
-        words[0] = "count=%s" % words[0]
-        words[1] = "motion=%s" % words[1]
-        words[2] = "udp-active=%s" % words[2]
-        words[3] = "tcp-active=%s" % words[3]
+        words[0] = f"count={words[0]}"
+        words[1] = f"motion={words[1]}"
+        words[2] = f"udp-active={words[2]}"
+        words[3] = f"tcp-active={words[3]}"
 
     elif event == "tx":
-        words[0] = "g=%s" % words[0]
+        words[0] = f"g={words[0]}"
         decode_type(words, 1)
         # words[2] = name
         # words[3] = control (domain for which these servers are believed
@@ -217,76 +234,73 @@ def handle_dnscache_log(line, match):
     print(timestamp, event, " ".join(words), flush=True)
 
 
-def handle_tinydns_log(line, match):
-    (timestamp, ip, port, id, code, type, name) = match.groups()
-    ip = convert_ip(ip)
+def handle_tinydns_log(match):
+    "Process log line for tinydns"
+    (timestamp, ip_address, port, request_id, code, record_type, name) = match.groups()
+    ip_address = convert_ip(ip_address)
     port = int(port, 16)
-    id = int(id, 16)
-    type = int(type, 16)  # "001c" -> 28
-    type = query_type.get(type, type)  # 28 -> "aaaa"
+    request_id = int(request_id, 16)
+    record_type = int(record_type, 16)  # "001c" -> 28
+    record_type = query_type.get(record_type, record_type)  # 28 -> "aaaa"
 
     sys.stdout.write(timestamp + " ")
     sys.stdout.flush()
 
     if code == "+":
         print(
-            ("sent response to %s:%s (id %s): %s %s" % (ip, port, id, type, name)),
+            (f"sent response to {ip_address}:{port} (id {request_id}): {record_type} {name}"),
             flush=True,
         )
     elif code in ("-", "I", "C"):
         reason = query_drop_reason[code]
-        print(
-            (
-                "dropped query (%s) from %s:%s (id %s): %s %s"
-                % (reason, ip, port, id, type, name)
-            ),
-            flush=True,
-        )
+        print((
+                f"dropped query ({reason}) from {ip_address}:{port} \
+(id {request_id}): {record_type} {name}"
+            ), flush=True)
     elif code == "/":
-        print(("dropped query (couldn't parse) from %s:%s" % (ip, port)), flush=True)
+        print((f"dropped query (couldn't parse) from {ip_address}:{port}"), flush=True)
     else:
         print(
-            ("%s from %s:%s (id %s): %s %s" % (code, ip, port, id, type, name)),
+            f"{code} from {ip_address}:{port} (id {request_id}): {record_type} {name}",
             flush=True,
         )
 
 
 def parse_logfile(file):
-    # Open pipe to tai64nlocal: we will write lines of our input (the
-    # raw log file) to it, and read log lines with readable timestamps
-    # from it.
-    # (tai_stdout, tai_stdin) = popen2("tai64nlocal", 0)
-    p = subprocess.Popen(
+    """Open pipe to tai64nlocal: we will write lines of our input (the
+    raw log file) to it, and read log lines with readable timestamps
+    from it.
+    """
+    with subprocess.Popen(
         "tai64nlocal",
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-    )
+    ) as tai_proc:
+        for line in file:
+            tai_proc.stdin.write(line.encode())
+            tai_proc.stdin.flush()
+            line = tai_proc.stdout.readline().decode()
 
-    for line in file:
-        p.stdin.write(line.encode())
-        p.stdin.flush()
-        line = p.stdout.readline().decode()
+            match = tinydns_log_re.match(line)
+            if match:
+                handle_tinydns_log(match)
+                continue
 
-        match = tinydns_log_re.match(line)
-        if match:
-            handle_tinydns_log(line, match)
-            continue
+            match = dnscache_log_re.match(line)
+            if match:
+                handle_dnscache_log(match)
+                continue
 
-        match = dnscache_log_re.match(line)
-        if match:
-            handle_dnscache_log(line, match)
-            continue
-
-        sys.stdout.write(line)
-        sys.stdout.flush()
+            sys.stdout.write(line)
+            sys.stdout.flush()
 
 def test():
     """
     Creates a test file with some log stuff in it.
     """
     def handler(signum, stack):
-        raise Exception('Test timeout')
+        raise RuntimeError('Test timeout')
     signal.signal(signal.SIGALRM, handler)
     signal.alarm(4)
 
@@ -295,19 +309,10 @@ def test():
     if result.failed == 0:
         print(f"{result.attempted} successful tests")
 
-def testfile(which):
+def loglines(*lines):
+    "Translate given list of strings into a multi-line file handle"
     tmp = tempfile.TemporaryFile(mode="r+")
-    lines = {
-        1: # Single line, simple, IPv4
-        ['@40000000660c67b5162f6f8c 00000000000000000000ffff450ac292:fab6:37b0 + 0001 luther.con.com'],
-        2: # Two lines, simple, IPv4
-        ['@40000000660c67b5162f6f8c 00000000000000000000ffff450ac292:fab6:37b0 + 0001 luther.con.com',
-         '@40000000660c67b516a6f14c 00000000000000000000ffff450ac292:ff30:c5e9 + 0041 luther.con.com'],
-        3: # Two lines, IPv6
-        ['@40000000660c971110832a4c 262000000cc800000000000000000207:0c4c:2e65 + 0001 luther.con.com',
-         '@40000000660c9711077afc54 2607f8b0402310000000000000000102:9c8f:365e + 0041 luther.con.com']
-    }
-    tmp.write('\n'.join(lines[which]))
+    tmp.write('\n'.join(lines))
     tmp.write('\n')
     tmp.seek(0)
     return tmp
