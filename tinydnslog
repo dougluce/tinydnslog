@@ -32,15 +32,29 @@ Hirsch <jh@plonk.de>.
 Modified to handle dnscache's AXFR request log lines by Malte Tancred
 (http://tancred.com/malte.html), 2005/12/20.
 
-Single-entry output:
->>> output = make_output("alpha", "single", OTPFILE)
->>> True if re.match(r'^[0-9]{6}$', output) else output
-True
+Basic parse of simple line w/IPv4 address:
+>>> parse_logfile(testfile(1))
+2024-04-02 13:16:43.372207500 sent response to 69.10.194.146:64182 (id 14256): a luther.con.com
+
+Parsing of two lines w/IPv4 addresses:
+>>> parse_logfile(testfile(2))
+2024-04-02 13:16:43.372207500 sent response to 69.10.194.146:64182 (id 14256): a luther.con.com
+2024-04-02 13:16:43.380039500 sent response to 69.10.194.146:65328 (id 50665): 65 luther.con.com
+
+Parse two lines with IPv6 addresses:
+>>> parse_logfile(testfile(3))
+2024-04-02 16:38:47.277031500 sent response to [2620:0:cc8::207]:3148 (id 11877): a luther.con.com
+2024-04-02 16:38:47.125500500 sent response to [2607:f8b0:4023:1000::102]:40079 (id 13918): 65 luther.con.com
+
 """
 
 import sys
 import re
 import subprocess
+import argparse
+import doctest
+import tempfile
+import signal
 
 from ipaddress import IPv6Address
 
@@ -82,20 +96,15 @@ query_drop_reason = {
 }
 
 
-def warn(filename, msg):
-    sys.stderr.write("warning: %s: %s\n" % (filename, msg))
-
-
 def convert_ip(ip):
     """Convert a hex string representing an IP address to conventional form."""
-    print("I see %s" % ip)
     ady = IPv6Address(int(ip, 16))
     if ady < IPv6Address("::ffff:255.255.255.255") and ady > IPv6Address(
         "::ffff:0.0.0.0"
     ):
         return ady.ipv4_mapped
     else:  # ipv6
-        return str(ady)
+        return "[%s]" % ady
 
 
 def _cvt_ip(match):
@@ -217,6 +226,7 @@ def handle_tinydns_log(line, match):
     type = query_type.get(type, type)  # 28 -> "aaaa"
 
     sys.stdout.write(timestamp + " ")
+    sys.stdout.flush()
 
     if code == "+":
         print(
@@ -241,7 +251,7 @@ def handle_tinydns_log(line, match):
         )
 
 
-def parse_logfile(file, filename):
+def parse_logfile(file):
     # Open pipe to tai64nlocal: we will write lines of our input (the
     # raw log file) to it, and read log lines with readable timestamps
     # from it.
@@ -269,26 +279,56 @@ def parse_logfile(file, filename):
             continue
 
         sys.stdout.write(line)
+        sys.stdout.flush()
 
+def test():
+    """
+    Creates a test file with some log stuff in it.
+    """
+    def handler(signum, stack):
+        raise Exception('Test timeout')
+    signal.signal(signal.SIGALRM, handler)
+    signal.alarm(4)
 
-# parse_logfile ()
+    result = doctest.testmod(verbose=args.verbose,
+                             optionflags=doctest.NORMALIZE_WHITESPACE|doctest.ELLIPSIS)
+    if result.failed == 0:
+        print(f"{result.attempted} successful tests")
 
+def testfile(which):
+    tmp = tempfile.TemporaryFile(mode="r+")
+    lines = {
+        1: # Single line, simple, IPv4
+        ['@40000000660c67b5162f6f8c 00000000000000000000ffff450ac292:fab6:37b0 + 0001 luther.con.com'],
+        2: # Two lines, simple, IPv4
+        ['@40000000660c67b5162f6f8c 00000000000000000000ffff450ac292:fab6:37b0 + 0001 luther.con.com',
+         '@40000000660c67b516a6f14c 00000000000000000000ffff450ac292:ff30:c5e9 + 0041 luther.con.com'],
+        3: # Two lines, IPv6
+        ['@40000000660c971110832a4c 262000000cc800000000000000000207:0c4c:2e65 + 0001 luther.con.com',
+         '@40000000660c9711077afc54 2607f8b0402310000000000000000102:9c8f:365e + 0041 luther.con.com']
+    }
+    tmp.write('\n'.join(lines[which]))
+    tmp.write('\n')
+    tmp.seek(0)
+    return tmp
 
-def main():
-    if len(sys.argv) > 1:
-        for filename in sys.argv[1:]:
-            if filename == "-":
-                parse_logfile(sys.stdin, "(stdin)")
-            else:
-                file = open(filename)
-                parse_logfile(file, filename)
-                file.close()
-    else:
-        parse_logfile(sys.stdin, "(stdin)")
+parser = argparse.ArgumentParser(description="Produce human readable output from TinyDNS logfiles")
 
+parser.add_argument(
+    '--input-file', '-i',
+    type=argparse.FileType('r'),
+    default=sys.stdin,
+    help='Input file name containing TinyDNS log output')
 
-if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        sys.exit("interrupted")
+parser.add_argument("-t", "--test", help="Run doctests", action="store_true")
+
+parser.add_argument(
+    "-v", "--verbose", help="Run doctests verbosely", action="store_true"
+)
+
+args = parser.parse_args()
+
+if args.test:
+    test()
+else:
+    parse_logfile(args.input_file)
