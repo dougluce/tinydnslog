@@ -218,6 +218,9 @@ def handle_dnscache_log(match):
         words[1] = f"motion={words[1]}"
         words[2] = f"udp-active={words[2]}"
         words[3] = f"tcp-active={words[3]}"
+        if len(words) > 5:
+            words[4] = f"hit={words[4]}"
+            words[5] = f"miss={words[5]}"
 
     elif event == "tx":
         words[0] = f"g={words[0]}"
